@@ -411,49 +411,56 @@
         const restartBtn = document.getElementById('restartBtn');
         const toastContainer = document.getElementById('toastContainer');
 
-        // Initialize Speech Recognition & Synthesis
-        function initSpeech() {
+        // Cria instâncias isoladas e limpas do SpeechRecognition sob demanda
+        function createSpeechRecognitionInstance() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-            if (!SpeechRecognition) {
-                showToast("Speech recognition is not supported on this browser.");
-                micBtn.disabled = true;
-                return;
-            }
+            if (!SpeechRecognition) return null;
 
-            recognition = new SpeechRecognition();
-            recognition.lang = 'it-IT';
-            recognition.interimResults = false;
-            recognition.maxAlternatives = 1;
+            const instance = new SpeechRecognition();
+            instance.lang = 'it-IT';
+            instance.interimResults = false;
+            instance.maxAlternatives = 1;
 
-            recognition.onstart = () => {
+            instance.onstart = () => {
                 isListening = true;
                 micBtn.classList.add('listening');
                 statusText.textContent = "Listening... Speak now";
                 transcriptContainer.innerHTML = `<p class="status-text">Listening...</p>`;
             };
 
-            recognition.onerror = (event) => {
-                console.error(event.error);
+            instance.onerror = (event) => {
+                console.error("Speech Recognition Error:", event.error);
                 stopListening();
                 if (event.error === 'no-speech') {
                     showToast("No speech detected. Please try again.");
                 } else if (event.error === 'not-allowed') {
-                    showToast("Microphone permission denied. Check address bar settings.");
+                    statusText.innerHTML = `<span style="color: var(--primary); font-weight: 600;">Ative o microfone no topo do navegador para praticar.</span>`;
+                    showToast("Acesso ao microfone negado ou bloqueado.");
                 } else {
                     showToast("Recognition error. Please try again.");
                 }
             };
 
-            recognition.onend = () => {
+            instance.onend = () => {
                 stopListening();
             };
 
-            recognition.onresult = (event) => {
+            instance.onresult = (event) => {
                 const resultText = event.results[0][0].transcript.trim();
                 processAnswer(resultText);
             };
 
-            // Load Italian Voice for Synthesis
+            return instance;
+        }
+
+        // Inicializa o motor de voz (synthesis)
+        function initSpeechEngine() {
+            if (!window.SpeechRecognition && !window.webkitSpeechRecognition) {
+                showToast("Speech recognition is not supported on this browser.");
+                micBtn.disabled = true;
+                return;
+            }
+
             if ('speechSynthesis' in window) {
                 const loadVoices = () => {
                     const voices = window.speechSynthesis.getVoices();
@@ -480,14 +487,18 @@
             statusText.textContent = "Click the microphone to reply";
         }
 
-        // Render Current Dialogue Step
+        // Renderiza a etapa atual e limpa referências antigas
         function renderStep() {
             if (currentStep >= conversation.length) {
                 showCompletion();
                 return;
             }
 
-            // Update Progress
+            // Reseta qualquer estado de escuta anterior
+            isListening = false;
+            micBtn.classList.remove('listening');
+
+            // Atualiza a barra de progresso
             const progressPercentage = (currentStep / conversation.length) * 100;
             progressBar.style.width = `${progressPercentage}%`;
 
@@ -509,18 +520,16 @@
             
             lucide.createIcons();
 
-            // Setup audio playback button
             document.getElementById('playAudioBtn').addEventListener('click', () => {
                 speak(item.character);
             });
 
-            // Trigger character voice automatically on loading step
             setTimeout(() => {
                 speak(item.character);
             }, 400);
         }
 
-        // Evaluate Student Transcript
+        // Avalia a resposta do aluno
         function processAnswer(transcript) {
             const currentItem = conversation[currentStep];
             const cleanTranscript = transcript.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"").toLowerCase().trim();
@@ -550,7 +559,7 @@
             }
         }
 
-        // UI Toast Notification Helper
+        // Sistema de Notificações Toast Interno
         function showToast(message) {
             const toast = document.createElement('div');
             toast.className = 'toast';
@@ -572,33 +581,39 @@
             resultScreen.classList.remove('hidden');
         }
 
-        // Event Listeners with explicit Permissions Delegation Check
-        micBtn.addEventListener('click', async () => {
+        // Event Listener do Botão do Microfone com Instanciação On-Demand
+        micBtn.addEventListener('click', () => {
             if (isListening) {
-                recognition.stop();
+                if (recognition) {
+                    try { recognition.stop(); } catch(e) {}
+                }
+                stopListening();
             } else {
+                // Cancela qualquer voz pendente do robô antes de começar a ouvir
                 if ('speechSynthesis' in window) {
                     window.speechSynthesis.cancel();
                 }
 
-                // Force context activation to clear Chromium sandbox restrictions
-                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
-                    try {
-                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-                        stream.getTracks().forEach(track => track.stop());
-                    } catch (err) {
-                        console.warn("Media devices permission catch:", err);
-                        if (err.name === 'NotAllowedError') {
-                            showToast("Permission denied. Enable mic access via browser address bar.");
-                            return;
-                        }
-                    }
+                // Cria uma instância limpa no exato momento do clique físico do cliente
+                recognition = createSpeechRecognitionInstance();
+
+                if (!recognition) {
+                    showToast("Speech recognition não suportado neste navegador.");
+                    return;
                 }
 
                 try {
                     recognition.start();
                 } catch(e) {
-                    console.log("Recognition instance conflict bypassed:", e);
+                    console.error("Erro crítico na inicialização imediata:", e);
+                    // Fallback resiliente caso o navegador trave a pipeline
+                    try {
+                        recognition.stop();
+                        setTimeout(() => { 
+                            recognition = createSpeechRecognitionInstance();
+                            recognition.start(); 
+                        }, 200);
+                    } catch(_) {}
                 }
             }
         });
@@ -611,10 +626,10 @@
             renderStep();
         });
 
-        // Initialize Core App Execution
+        // Inicialização Core da Página
         window.addEventListener('DOMContentLoaded', () => {
             lucide.createIcons();
-            initSpeech();
+            initSpeechEngine();
             renderStep();
         });
     </script>
