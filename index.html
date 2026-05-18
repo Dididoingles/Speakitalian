@@ -118,6 +118,7 @@
             align-self: flex-start;
             border-bottom-left-radius: 4px;
             padding-right: 50px;
+            width: 100%;
         }
 
         .audio-btn {
@@ -410,11 +411,11 @@
         const restartBtn = document.getElementById('restartBtn');
         const toastContainer = document.getElementById('toastContainer');
 
-        // Initialize Speech Recognition & Synthesis (Original Architecture)
+        // Initialize Speech Recognition & Synthesis
         function initSpeech() {
             const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
             if (!SpeechRecognition) {
-                showToast("Speech recognition is not supported on this browser.", "error");
+                showToast("Speech recognition is not supported on this browser.");
                 micBtn.disabled = true;
                 return;
             }
@@ -436,6 +437,8 @@
                 stopListening();
                 if (event.error === 'no-speech') {
                     showToast("No speech detected. Please try again.");
+                } else if (event.error === 'not-allowed') {
+                    showToast("Microphone permission denied. Check address bar settings.");
                 } else {
                     showToast("Recognition error. Please try again.");
                 }
@@ -451,16 +454,20 @@
             };
 
             // Load Italian Voice for Synthesis
-            window.speechSynthesis.onvoiceschanged = () => {
-                const voices = window.speechSynthesis.getVoices();
-                synthesisVoice = voices.find(voice => voice.lang.startsWith('it'));
-            };
+            if ('speechSynthesis' in window) {
+                const loadVoices = () => {
+                    const voices = window.speechSynthesis.getVoices();
+                    synthesisVoice = voices.find(voice => voice.lang.startsWith('it'));
+                };
+                loadVoices();
+                window.speechSynthesis.onvoiceschanged = loadVoices;
+            }
         }
 
         function speak(text) {
             if ('speechSynthesis' in window) {
-                window.speechSynthesis.cancel(); // Stop any ongoing speech
-                const utterance = new SynthesisUtterance || new SpeechSynthesisUtterance(text);
+                window.speechSynthesis.cancel(); 
+                const utterance = new SpeechSynthesisUtterance(text);
                 utterance.lang = 'it-IT';
                 if (synthesisVoice) utterance.voice = synthesisVoice;
                 window.speechSynthesis.speak(utterance);
@@ -516,13 +523,9 @@
         // Evaluate Student Transcript
         function processAnswer(transcript) {
             const currentItem = conversation[currentStep];
-            
-            // Clean dynamic structures or punctuation for a smoother UX check
             const cleanTranscript = transcript.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()?]/g,"").toLowerCase().trim();
 
-            // Loose validation based on flexible regex patterns updated for London
             if (currentItem.validation.test(cleanTranscript) || cleanTranscript.length > 4) {
-                // Render Success State in Controls area temporarily
                 transcriptContainer.innerHTML = `
                     <p class="transcript-preview">"${transcript}"</p>
                     <div class="feedback-match">
@@ -533,7 +536,6 @@
                 
                 currentStep++;
                 
-                // Advance step after a small pedagogical pause
                 setTimeout(() => {
                     renderStep();
                     transcriptContainer.innerHTML = `<p class="status-text">Click the microphone to reply</p>`;
@@ -556,10 +558,8 @@
             toastContainer.appendChild(toast);
             lucide.createIcons();
 
-            // Trigger paint then animate
             setTimeout(() => toast.classList.add('show'), 10);
 
-            // Clear after timeout
             setTimeout(() => {
                 toast.classList.remove('show');
                 toast.addEventListener('transitionend', () => toast.remove());
@@ -572,12 +572,34 @@
             resultScreen.classList.remove('hidden');
         }
 
-        // Event Listeners
-        micBtn.addEventListener('click', () => {
+        // Event Listeners with explicit Permissions Delegation Check
+        micBtn.addEventListener('click', async () => {
             if (isListening) {
                 recognition.stop();
             } else {
-                recognition.start();
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                }
+
+                // Force context activation to clear Chromium sandbox restrictions
+                if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+                    try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                        stream.getTracks().forEach(track => track.stop());
+                    } catch (err) {
+                        console.warn("Media devices permission catch:", err);
+                        if (err.name === 'NotAllowedError') {
+                            showToast("Permission denied. Enable mic access via browser address bar.");
+                            return;
+                        }
+                    }
+                }
+
+                try {
+                    recognition.start();
+                } catch(e) {
+                    console.log("Recognition instance conflict bypassed:", e);
+                }
             }
         });
 
